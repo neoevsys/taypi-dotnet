@@ -1,0 +1,48 @@
+name: Publish to NuGet
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            7.0.x
+            8.0.x
+
+      - name: Restore
+        run: dotnet restore src/Taypi.csproj
+
+      - name: Build
+        run: dotnet build src/Taypi.csproj -c Release --no-restore
+
+      - name: Pack
+        run: dotnet pack src/Taypi.csproj -c Release --no-build -o ./artifacts
+
+      - name: Import Code Signing Certificate
+        shell: powershell
+        run: |
+          $pfxBytes = [Convert]::FromBase64String("${{ secrets.CODE_SIGNING_CERT }}")
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesigning.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+          Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString "${{ secrets.CODE_SIGNING_PASSWORD }}" -AsPlainText -Force)
+          Remove-Item $pfxPath
+
+      - name: Sign NuGet Package
+        shell: powershell
+        run: |
+          $nupkg = Get-ChildItem ./artifacts/*.nupkg | Select-Object -First 1
+          dotnet nuget sign $nupkg.FullName `
+            --certificate-fingerprint "${{ secrets.CODE_SIGNING_THUMBPRINT }}" `
+            --timestamper http://timestamp.sectigo.com
+
+      - name: Push to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json

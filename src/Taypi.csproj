@@ -6,7 +6,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Taypi</RootNamespace>
     <AssemblyName>Taypi</AssemblyName>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Authors>NEO TECHNOLOGY PERU E.I.R.L.</Authors>
     <Company>NEO TECHNOLOGY PERU E.I.R.L.</Company>
     <Description>SDK oficial de TAYPI para pagos QR interoperables en Peru. Acepta pagos con Yape, Plin y cualquier app bancaria conectada a la CCE.</Description>
@@ -14,9 +15,13 @@
     <PackageTags>taypi;pagos;qr;yape;plin;peru;cce;emvco</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://taypi.pe</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/neotecperu/taypi-dotnet</RepositoryUrl>
+    <RepositoryUrl>https://github.com/neoevsys/taypi-dotnet</RepositoryUrl>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' Or '$(TargetFramework)' == 'net48'">
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
