@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Taypi</RootNamespace>
     <AssemblyName>Taypi</AssemblyName>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Authors>NEO TECHNOLOGY PERU E.I.R.L.</Authors>
     <Company>NEO TECHNOLOGY PERU E.I.R.L.</Company>

@@ -16,7 +16,7 @@ namespace TaypiExamples
             using var taypi = new TaypiClient(
                 "taypi_pk_test_TU_PUBLIC_KEY_AQUI",
                 "taypi_sk_test_TU_SECRET_KEY_AQUI",
-                new TaypiOptions { BaseUrl = "https://dev.taypi.pe" }
+                new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" }
             );
 
             try

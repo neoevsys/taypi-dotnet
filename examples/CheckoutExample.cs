@@ -14,7 +14,7 @@ namespace TaypiExamples
             using var taypi = new TaypiClient(
                 "taypi_pk_test_TU_PUBLIC_KEY_AQUI",
                 "taypi_sk_test_TU_SECRET_KEY_AQUI",
-                new TaypiOptions { BaseUrl = "https://dev.taypi.pe" }
+                new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" }
             );
 
             try
@@ -32,7 +32,7 @@ namespace TaypiExamples
                 Console.WriteLine($"Checkout token: {session["checkout_token"]}");
 
                 // Usar en frontend:
-                // <script src="https://dev.taypi.pe/v1/checkout.js"></script>
+                // <script src="https://app.taypi.pe/v1/checkout.js"></script>
                 // Taypi.publicKey = 'taypi_pk_test_...';
                 // Taypi.open({ sessionToken: 'TOKEN_AQUI', onSuccess: ... });
             }

@@ -7,7 +7,7 @@ namespace Taypi
     {
         /// <summary>
         /// URL base del API. Por defecto: https://app.taypi.pe
-        /// Valores permitidos: https://app.taypi.pe, https://dev.taypi.pe, https://sandbox.taypi.pe
+        /// Valores permitidos: https://app.taypi.pe, https://sandbox.taypi.pe
         /// </summary>
         public string? BaseUrl { get; set; }
 

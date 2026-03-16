@@ -201,10 +201,7 @@ public async Task<IHttpActionResult> HandleWebhook()
 // Produccion (default)
 var taypi = new TaypiClient("pk", "sk");
 
-// Desarrollo
-var taypi = new TaypiClient("pk", "sk", new TaypiOptions { BaseUrl = "https://dev.taypi.pe" });
-
-// Sandbox
+// Sandbox (pruebas)
 var taypi = new TaypiClient("pk", "sk", new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" });
 ```
 
@@ -227,7 +224,7 @@ builder.Services.AddSingleton(sp =>
 //   "Taypi": {
 //     "PublicKey": "taypi_pk_test_...",
 //     "SecretKey": "taypi_sk_test_...",
-//     "BaseUrl": "https://dev.taypi.pe"
+//     "BaseUrl": "https://sandbox.taypi.pe"
 //   }
 // }
 ```

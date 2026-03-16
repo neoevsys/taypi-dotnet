@@ -23,7 +23,6 @@ namespace Taypi
         private static readonly string[] Environments =
         {
             "https://app.taypi.pe",
-            "https://dev.taypi.pe",
             "https://sandbox.taypi.pe"
         };
 
@@ -77,7 +76,7 @@ namespace Taypi
                 if (Array.IndexOf(Environments, url) < 0)
                 {
                     throw new TaypiException(
-                        "URL no permitida. Usa: app.taypi.pe, dev.taypi.pe o sandbox.taypi.pe",
+                        "URL no permitida. Usa: app.taypi.pe o sandbox.taypi.pe",
                         "INVALID_BASE_URL");
                 }
 
