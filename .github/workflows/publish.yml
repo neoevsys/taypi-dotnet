@@ -6,7 +6,7 @@ on:
 
 jobs:
   publish:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -26,23 +26,6 @@ jobs:
 
       - name: Pack
         run: dotnet pack src/Taypi.csproj -c Release --no-build -o ./artifacts
-
-      - name: Import Code Signing Certificate
-        shell: powershell
-        run: |
-          $pfxBytes = [Convert]::FromBase64String("${{ secrets.CODE_SIGNING_CERT }}")
-          $pfxPath = Join-Path $env:RUNNER_TEMP "codesigning.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
-          Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString "${{ secrets.CODE_SIGNING_PASSWORD }}" -AsPlainText -Force)
-          Remove-Item $pfxPath
-
-      - name: Sign NuGet Package
-        shell: powershell
-        run: |
-          $nupkg = Get-ChildItem ./artifacts/*.nupkg | Select-Object -First 1
-          dotnet nuget sign $nupkg.FullName `
-            --certificate-fingerprint "${{ secrets.CODE_SIGNING_THUMBPRINT }}" `
-            --timestamper http://timestamp.sectigo.com
 
       - name: Push to NuGet
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
