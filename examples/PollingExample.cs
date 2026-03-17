@@ -7,7 +7,7 @@ namespace TaypiExamples
 {
     /// <summary>
     /// Ejemplo: crear un pago y esperar (polling) hasta que se complete o expire.
-    /// Ideal para integraciones server-to-server sin webhooks, POS, kioscos, etc.
+    /// Ideal para POS, kioscos, WinForms, o server-to-server sin webhooks.
     /// </summary>
     class PollingExample
     {
@@ -15,14 +15,13 @@ namespace TaypiExamples
         {
             using var taypi = new TaypiClient(
                 "taypi_pk_test_TU_PUBLIC_KEY_AQUI",
-                "taypi_sk_test_TU_SECRET_KEY_AQUI",
-                new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" }
+                "taypi_sk_test_TU_SECRET_KEY_AQUI"
             );
 
             try
             {
                 // 1. Crear pago
-                var payment = await taypi.CreatePaymentAsync(
+                PaymentResponse payment = await taypi.CreatePaymentAsync(
                     new PaymentParams
                     {
                         Amount = "15.00",
@@ -32,28 +31,24 @@ namespace TaypiExamples
                     idempotencyKey: "KIOSK-001"
                 );
 
-                var paymentId = payment["payment_id"]?.ToString() ?? "";
-                Console.WriteLine($"Pago creado: {paymentId}");
-                Console.WriteLine($"QR: {payment["checkout_url"]}");
+                Console.WriteLine($"Pago creado: {payment.PaymentId}");
+                Console.WriteLine($"QR: {payment.CheckoutUrl}");
                 Console.WriteLine("Esperando pago...");
 
                 // 2. Esperar hasta que el cliente pague (polling cada 3 segundos, max 15 minutos)
                 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
 
-                var result = await taypi.WaitForPaymentAsync(
-                    paymentId,
+                PaymentResponse result = await taypi.WaitForPaymentAsync(
+                    payment.PaymentId,
                     pollingIntervalSeconds: 3,
                     timeoutSeconds: 900,
                     cancellationToken: cts.Token
                 );
 
-                var status = result["status"]?.ToString();
-
-                switch (status)
+                switch (result.Status)
                 {
                     case "completed":
-                        Console.WriteLine($"Pago completado! paid_at: {result["paid_at"]}");
-                        // Entregar producto, actualizar orden, etc.
+                        Console.WriteLine($"Pago completado! Pagador: {result.PayerName} paid_at: {result.PaidAt}");
                         break;
 
                     case "expired":

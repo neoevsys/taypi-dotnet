@@ -8,7 +8,7 @@ Acepta pagos con Yape, Plin y cualquier app bancaria conectada a la CCE.
 
 | Plataforma | Version |
 |---|---|
-| .NET Framework | 4.8+ |
+| .NET Framework | 4.8+ (WinForms, WPF, ASP.NET) |
 | .NET | 7.0, 8.0 |
 | .NET Standard | 2.0 |
 
@@ -29,13 +29,16 @@ Install-Package Taypi
 ```csharp
 using Taypi;
 
+// El SDK detecta automaticamente el ambiente desde el prefijo del key:
+//   taypi_pk_test_... → sandbox (sandbox.taypi.pe)
+//   taypi_pk_live_... → produccion (app.taypi.pe)
 using var taypi = new TaypiClient(
     "taypi_pk_test_...",  // Public key
-    "taypi_sk_test_..."   // Secret key
+    "taypi_sk_test_..."   // Secret key — nunca se envia por la red
 );
 
-// Crear sesion de checkout
-var session = await taypi.CreateCheckoutSessionAsync(
+// Crear pago con QR
+PaymentResponse payment = await taypi.CreatePaymentAsync(
     new PaymentParams
     {
         Amount = "25.00",
@@ -45,10 +48,48 @@ var session = await taypi.CreateCheckoutSessionAsync(
     idempotencyKey: "ORD-12345"
 );
 
-Console.WriteLine(session["checkout_token"]);
+Console.WriteLine(payment.PaymentId);   // UUID del pago
+Console.WriteLine(payment.QrImage);     // imagen SVG base64 lista para mostrar
+Console.WriteLine(payment.QrText);      // texto del QR (para generar imagen propia)
+Console.WriteLine(payment.CheckoutUrl); // URL de checkout
+Console.WriteLine(payment.ExpiresAt);   // fecha de expiracion
 ```
 
-### Checkout completo (C# + checkout.js)
+## Dos flujos de integracion
+
+### 1. CreatePaymentAsync (WinForms, POS, server-to-server)
+
+Devuelve todo en un solo paso: QR, URL, payment_id. **Este es el recomendado para aplicaciones de escritorio.**
+
+```csharp
+PaymentResponse payment = await taypi.CreatePaymentAsync(
+    new PaymentParams
+    {
+        Amount = "50.00",
+        Reference = "VENTA-001",
+        Description = "Venta en tienda"
+    },
+    idempotencyKey: "VENTA-001"
+);
+
+// Propiedades disponibles:
+payment.PaymentId       // "a1515df6-92d4-..."
+payment.Amount          // "50.00"
+payment.Currency        // "PEN"
+payment.Status          // "pending"
+payment.QrText          // "0002010102122637..." (texto para generar QR propio)
+payment.QrImage         // "data:image/svg+xml;base64,..." (imagen lista para mostrar)
+payment.CheckoutUrl     // "https://sandbox.taypi.pe/qr/cRP2tzLzBW"
+payment.CheckoutToken   // UUID de sesion
+payment.ShortHash       // "cRP2tzLzBW"
+payment.ExpiresAt       // "2026-03-17T19:46:48-05:00"
+payment.CreatedAt       // "2026-03-16T19:46:48-05:00"
+payment.Description     // "Venta en tienda"
+```
+
+### 2. Checkout Sessions (web con checkout.js)
+
+Flujo de dos pasos para integraciones web con el widget JavaScript.
 
 **Backend (ASP.NET Core):**
 
@@ -56,7 +97,8 @@ Console.WriteLine(session["checkout_token"]);
 [HttpPost("crear-pago")]
 public async Task<IActionResult> CrearPago([FromBody] OrderRequest order)
 {
-    var session = await _taypi.CreateCheckoutSessionAsync(
+    // Paso 1: crear sesion (retorna solo checkout_token)
+    CheckoutSessionResponse session = await _taypi.CreateCheckoutSessionAsync(
         new PaymentParams
         {
             Amount = order.Total.ToString("F2"),
@@ -66,7 +108,7 @@ public async Task<IActionResult> CrearPago([FromBody] OrderRequest order)
         idempotencyKey: order.OrderId
     );
 
-    return Ok(new { checkout_token = session["checkout_token"], public_key = _taypi.PublicKey });
+    return Ok(new { checkout_token = session.CheckoutToken, public_key = _taypi.PublicKey });
 }
 ```
 
@@ -85,77 +127,90 @@ public async Task<IActionResult> CrearPago([FromBody] OrderRequest order)
 </script>
 ```
 
-## Metodos disponibles
-
-### Checkout Sessions
+**Consultar datos del QR (opcional):**
 
 ```csharp
-// Crear sesion para checkout.js (retorna checkout_token)
-var session = await taypi.CreateCheckoutSessionAsync(
-    new PaymentParams
-    {
-        Amount = "50.00",
-        Reference = "ORD-789",
-        Description = "Descripcion del pago",
-        Metadata = new Dictionary<string, string> { ["source"] = "web" }
-    },
-    idempotencyKey: "ORD-789"
-);
+// Paso 2: obtener datos completos de la sesion
+CheckoutSessionDetail detail = await taypi.GetCheckoutSessionAsync(session.CheckoutToken);
+
+detail.PaymentId      // UUID del pago
+detail.QrImage        // imagen SVG base64
+detail.Amount         // "50.00"
+detail.Status         // "pending"
+detail.MerchantName   // nombre del comercio
+detail.StoreName      // nombre de la tienda/sucursal
+detail.ExpiresAt      // fecha de expiracion
 ```
+
+## Campos QR: QrText vs QrImage
+
+| Campo | Que es | Para que sirve |
+|---|---|---|
+| `QrText` | `"0002010102122637..."` texto EMVCo | Generar tu propio QR con ZXing, QRCoder, etc. |
+| `QrImage` | `"data:image/svg+xml;base64,PD9..."` imagen SVG | Mostrar directamente como imagen |
+| `CheckoutUrl` | `"https://sandbox.taypi.pe/qr/xxx"` URL | Abrir en navegador |
+
+## Metodos disponibles
 
 ### Pagos
 
 ```csharp
-// Crear pago (retorna datos completos: QR, checkout_url, etc.)
-var payment = await taypi.CreatePaymentAsync(
-    new PaymentParams { Amount = "50.00", Reference = "ORD-789" },
-    idempotencyKey: "ORD-789"
-);
+// Crear pago con QR (todo en un paso)
+PaymentResponse payment = await taypi.CreatePaymentAsync(params, idempotencyKey);
 
 // Consultar pago
-var payment = await taypi.GetPaymentAsync("uuid-del-pago");
+PaymentResponse payment = await taypi.GetPaymentAsync("uuid-del-pago");
 
 // Listar pagos con filtros
-var result = await taypi.ListPaymentsAsync(new ListPaymentsFilters
+PaymentListResponse list = await taypi.ListPaymentsAsync(new ListPaymentsFilters
 {
     Status = "completed",
     From = "2026-03-01",
     To = "2026-03-31",
     PerPage = 50
 });
+// list.Data → List<PaymentResponse>
+// list.Meta.Total, list.Meta.CurrentPage, list.Meta.LastPage
 
 // Cancelar pago pendiente
-var cancelled = await taypi.CancelPaymentAsync("uuid-del-pago", "cancel-ORD-789");
+PaymentResponse cancelled = await taypi.CancelPaymentAsync("uuid", "cancel-ORD-789");
 ```
 
 ### Polling (esperar pago)
 
-Para integraciones server-to-server, POS, kioscos o cualquier caso donde no uses webhooks:
+Para POS, kioscos o cualquier caso sin webhooks:
 
 ```csharp
-// Crear pago
-var payment = await taypi.CreatePaymentAsync(
+PaymentResponse payment = await taypi.CreatePaymentAsync(
     new PaymentParams { Amount = "15.00", Reference = "KIOSK-001" },
     idempotencyKey: "KIOSK-001"
 );
 
 // Mostrar QR al cliente...
-Console.WriteLine(payment["checkout_url"]);
+Console.WriteLine(payment.CheckoutUrl);
 
 // Esperar hasta que pague (polling cada 3s, max 15 min)
-var result = await taypi.WaitForPaymentAsync(
-    payment["payment_id"]!.ToString()!,
-    pollingIntervalSeconds: 3,   // cada 3 segundos (min: 1)
-    timeoutSeconds: 900          // 15 minutos (coincide con TTL del QR)
+PaymentResponse result = await taypi.WaitForPaymentAsync(
+    payment.PaymentId,
+    pollingIntervalSeconds: 3,
+    timeoutSeconds: 900
 );
 
-if (result["status"]?.ToString() == "completed")
-{
-    Console.WriteLine("Pago recibido!");
-}
+if (result.Status == "completed")
+    Console.WriteLine($"Pago recibido! Pagador: {result.PayerName}");
 ```
 
 Soporta `CancellationToken` para cancelar la espera externamente. Lanza `TimeoutException` si se supera el tiempo maximo.
+
+### Checkout Sessions
+
+```csharp
+// Crear sesion (retorna solo checkout_token)
+CheckoutSessionResponse session = await taypi.CreateCheckoutSessionAsync(params, idempotencyKey);
+
+// Consultar datos completos de la sesion (QR, monto, merchant, etc.)
+CheckoutSessionDetail detail = await taypi.GetCheckoutSessionAsync(session.CheckoutToken);
+```
 
 ### Webhooks
 
@@ -197,25 +252,48 @@ public async Task<IHttpActionResult> HandleWebhook()
 
 ## Entornos
 
-```csharp
-// Produccion (default)
-var taypi = new TaypiClient("pk", "sk");
+El SDK detecta automaticamente el ambiente desde el prefijo de las API keys:
 
-// Sandbox (pruebas)
-var taypi = new TaypiClient("pk", "sk", new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" });
+```csharp
+// Keys de test → sandbox automatico
+var taypi = new TaypiClient("taypi_pk_test_...", "taypi_sk_test_...");
+Console.WriteLine(taypi.IsSandbox); // true
+
+// Keys de produccion → produccion automatico
+var taypi = new TaypiClient("taypi_pk_live_...", "taypi_sk_live_...");
+Console.WriteLine(taypi.IsSandbox); // false
+```
+
+No necesitas configurar `BaseUrl` manualmente. El SDK valida que:
+- Ambas keys sean del mismo ambiente (test + test o live + live)
+- Si configuras `BaseUrl` explicitamente, sea consistente con las keys
+
+## Validacion de API keys
+
+El SDK valida las keys al instanciar el cliente:
+
+```csharp
+// Key con formato invalido → TaypiException "INVALID_KEY_FORMAT"
+new TaypiClient("pk_invalida", "sk_invalida");
+
+// Keys de ambientes diferentes → TaypiException "KEY_ENVIRONMENT_MISMATCH"
+new TaypiClient("taypi_pk_test_...", "taypi_sk_live_...");
+
+// Key de test con URL de produccion → TaypiException "KEY_URL_MISMATCH"
+new TaypiClient("taypi_pk_test_...", "taypi_sk_test_...",
+    new TaypiOptions { BaseUrl = "https://app.taypi.pe" });
 ```
 
 ## Inyeccion de dependencias (ASP.NET Core)
 
 ```csharp
-// Program.cs o Startup.cs
+// Program.cs
 builder.Services.AddSingleton(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
     return new TaypiClient(
         config["Taypi:PublicKey"]!,
-        config["Taypi:SecretKey"]!,
-        new TaypiOptions { BaseUrl = config["Taypi:BaseUrl"] }
+        config["Taypi:SecretKey"]!
     );
 });
 
@@ -223,8 +301,7 @@ builder.Services.AddSingleton(sp =>
 // {
 //   "Taypi": {
 //     "PublicKey": "taypi_pk_test_...",
-//     "SecretKey": "taypi_sk_test_...",
-//     "BaseUrl": "https://sandbox.taypi.pe"
+//     "SecretKey": "taypi_sk_test_..."
 //   }
 // }
 ```
@@ -244,7 +321,7 @@ builder.Services.AddSingleton(sp =>
     return new TaypiClient(
         config["Taypi:PublicKey"]!,
         config["Taypi:SecretKey"]!,
-        new TaypiOptions { BaseUrl = config["Taypi:BaseUrl"] },
+        new TaypiOptions(),
         factory.CreateClient("taypi")
     );
 });
@@ -252,13 +329,13 @@ builder.Services.AddSingleton(sp =>
 
 ## Idempotencia
 
-Todos los metodos que crean recursos (`CreateCheckoutSessionAsync`, `CreatePaymentAsync`, `CancelPaymentAsync`) requieren un `idempotencyKey` explicito. Esto protege contra pagos duplicados por reintentos de red.
+Todos los metodos que crean recursos requieren un `idempotencyKey` explicito. Esto protege contra pagos duplicados por reintentos de red.
 
 ```csharp
 // Usar la referencia de orden como idempotency key
-await taypi.CreateCheckoutSessionAsync(parameters, idempotencyKey: "ORD-12345");
+await taypi.CreatePaymentAsync(parameters, idempotencyKey: "ORD-12345");
 
-// Si el mismo key se envia dentro de los 15 minutos, retorna la respuesta cacheada
+// Si el mismo key se envia dentro de las 24 horas, retorna la respuesta cacheada
 // sin crear un pago nuevo.
 ```
 
@@ -267,14 +344,13 @@ await taypi.CreateCheckoutSessionAsync(parameters, idempotencyKey: "ORD-12345");
 ```csharp
 try
 {
-    var session = await taypi.CreateCheckoutSessionAsync(parameters, reference);
+    var payment = await taypi.CreatePaymentAsync(parameters, reference);
 }
 catch (TaypiException ex)
 {
     Console.WriteLine(ex.Message);     // "El monto minimo es S/ 1.00"
     Console.WriteLine(ex.ErrorCode);   // "PAYMENT_INVALID_AMOUNT"
     Console.WriteLine(ex.HttpCode);    // 422
-    Console.WriteLine(ex.Response);    // Respuesta completa del API (Dictionary)
 }
 ```
 
@@ -282,6 +358,9 @@ catch (TaypiException ex)
 
 | Codigo | HTTP | Descripcion |
 |---|---|---|
+| `INVALID_KEY_FORMAT` | — | Key mal formada (se lanza al construir el cliente) |
+| `KEY_ENVIRONMENT_MISMATCH` | — | Una key es test y otra live |
+| `KEY_URL_MISMATCH` | — | Key no coincide con la URL configurada |
 | `AUTH_KEY_INVALID` | 401 | API key no existe o fue revocada |
 | `AUTH_SIGNATURE_INVALID` | 403 | Firma HMAC incorrecta |
 | `AUTH_TIMESTAMP_EXPIRED` | 403 | Timestamp con mas de 5 minutos |
@@ -290,15 +369,24 @@ catch (TaypiException ex)
 | `PAYMENT_NOT_FOUND` | 404 | UUID de pago no encontrado |
 | `PAYMENT_EXPIRED` | 410 | QR expiro (15 minutos) |
 | `PROCESSOR_TIMEOUT` | 502 | Sistema de pagos no respondio |
+| `TIMEOUT` | — | Timeout de conexion HTTP |
+| `CONNECTION_ERROR` | — | Error de red |
+
+## Seguridad
+
+- El **secret key** nunca se envia por la red. Solo se usa localmente para calcular la firma HMAC-SHA256.
+- Cada request se firma automaticamente: `HMAC-SHA256(secret, timestamp + method + path + body)`
+- El header `Authorization: Bearer` lleva la **public key**, no la secret.
+- TLS 1.2+ se configura automaticamente en .NET Framework 4.8.
 
 ## .NET Framework 4.8
 
-El SDK configura automaticamente TLS 1.2+ en .NET Framework. No se requiere configuracion adicional.
+El SDK es compatible con .NET Framework 4.8 sin configuracion adicional:
 
 ```csharp
 // Funciona igual que en .NET 7/8
-var taypi = new TaypiClient("pk", "sk");
-var payment = await taypi.CreatePaymentAsync(parameters, "ORD-123");
+var taypi = new TaypiClient("taypi_pk_test_...", "taypi_sk_test_...");
+PaymentResponse payment = await taypi.CreatePaymentAsync(parameters, "ORD-123");
 ```
 
 ## Licencia

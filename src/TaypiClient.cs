@@ -18,7 +18,7 @@ namespace Taypi
     /// </summary>
     public class TaypiClient : IDisposable
     {
-        private const string Version = "1.0.0";
+        private const string Version = "1.1.2";
 
         private static readonly string[] Environments =
         {
@@ -36,6 +36,12 @@ namespace Taypi
         /// Clave publica del comercio (taypi_pk_...).
         /// </summary>
         public string PublicKey { get; }
+
+        /// <summary>
+        /// Indica si el cliente esta en modo sandbox (true) o produccion (false).
+        /// Se detecta automaticamente del prefijo de las API keys.
+        /// </summary>
+        public bool IsSandbox { get; }
 
         private readonly string _secretKey;
         private readonly string _baseUrl;
@@ -65,6 +71,24 @@ namespace Taypi
             PublicKey = publicKey ?? throw new ArgumentNullException(nameof(publicKey));
             _secretKey = secretKey ?? throw new ArgumentNullException(nameof(secretKey));
 
+            // ── Validar formato de API keys ──
+            ValidateKeyFormat(publicKey, "publicKey", "taypi_pk_");
+            ValidateKeyFormat(secretKey, "secretKey", "taypi_sk_");
+
+            // ── Detectar ambiente desde las keys ──
+            var publicIsTest = publicKey.StartsWith("taypi_pk_test_");
+            var secretIsTest = secretKey.StartsWith("taypi_sk_test_");
+
+            if (publicIsTest != secretIsTest)
+            {
+                throw new TaypiException(
+                    "Las keys no coinciden: una es de test y otra de produccion. "
+                    + "Ambas deben ser del mismo ambiente (taypi_pk_test_ + taypi_sk_test_ o taypi_pk_live_ + taypi_sk_live_).",
+                    "KEY_ENVIRONMENT_MISMATCH");
+            }
+
+            var isTestMode = publicIsTest;
+
             var opts = options ?? new TaypiOptions();
 
             if (!string.IsNullOrEmpty(opts.BaseUrl))
@@ -76,16 +100,36 @@ namespace Taypi
                 if (Array.IndexOf(Environments, url) < 0)
                 {
                     throw new TaypiException(
-                        "URL no permitida. Usa: app.taypi.pe o sandbox.taypi.pe",
+                        "URL no permitida. Usa: https://app.taypi.pe (produccion) o https://sandbox.taypi.pe (sandbox).",
                         "INVALID_BASE_URL");
+                }
+
+                // ── Validar consistencia key ↔ ambiente ──
+                var urlIsSandbox = url == Environments[1]; // sandbox.taypi.pe
+                if (isTestMode && !urlIsSandbox)
+                {
+                    throw new TaypiException(
+                        "Keys de test (taypi_pk_test_) solo funcionan con sandbox. "
+                        + "Usa BaseUrl = \"https://sandbox.taypi.pe\" o cambia a keys de produccion (taypi_pk_live_).",
+                        "KEY_URL_MISMATCH");
+                }
+                if (!isTestMode && urlIsSandbox)
+                {
+                    throw new TaypiException(
+                        "Keys de produccion (taypi_pk_live_) solo funcionan con produccion. "
+                        + "Usa BaseUrl = \"https://app.taypi.pe\" o cambia a keys de test (taypi_pk_test_).",
+                        "KEY_URL_MISMATCH");
                 }
 
                 _baseUrl = url;
             }
             else
             {
-                _baseUrl = Environments[0];
+                // ── Auto-detectar ambiente desde el key ──
+                _baseUrl = isTestMode ? Environments[1] : Environments[0];
             }
+
+            IsSandbox = isTestMode;
 
             if (httpClient != null)
             {
@@ -104,39 +148,68 @@ namespace Taypi
         }
 
         // ─── Checkout Sessions ───────────────────────────────────
+        //
+        // Flujo checkout.js (web):
+        //   1. Backend: CreateCheckoutSessionAsync → obtiene checkout_token
+        //   2. Frontend JS: Taypi.open({ sessionToken: token })
+        //   3. checkout.js llama GetCheckoutSessionAsync internamente
+        //
+        // Para WinForms/POS/server-to-server, usar CreatePaymentAsync directamente
+        // que retorna todo en un solo paso (QR, URL, payment_id).
 
         /// <summary>
         /// Crea una sesion de checkout para usar con checkout.js.
-        /// Retorna un diccionario con "checkout_token".
+        /// Retorna solo el checkout_token. Para obtener QR y datos, usar GetCheckoutSessionAsync.
+        /// Para WinForms/POS, usar CreatePaymentAsync que retorna todo directamente.
         /// </summary>
         /// <param name="parameters">Parametros del pago (amount, reference, description, metadata)</param>
         /// <param name="idempotencyKey">Clave unica para evitar pagos duplicados (ej: ID de orden)</param>
         /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
-        /// <returns>Diccionario con checkout_token</returns>
-        public async Task<Dictionary<string, object?>> CreateCheckoutSessionAsync(
+        /// <returns>Sesion con CheckoutToken</returns>
+        public async Task<CheckoutSessionResponse> CreateCheckoutSessionAsync(
             PaymentParams parameters,
             string idempotencyKey,
             CancellationToken cancellationToken = default)
         {
             var response = await PostAsync("/v1/checkout/sessions", ParamsToDict(parameters), idempotencyKey, cancellationToken).ConfigureAwait(false);
-            return ExtractData(response);
+            return DeserializeData<CheckoutSessionResponse>(response);
+        }
+
+        /// <summary>
+        /// Obtiene los datos completos de una sesion de checkout (QR, monto, estado, merchant).
+        /// Usar despues de CreateCheckoutSessionAsync para obtener la imagen QR.
+        /// </summary>
+        /// <param name="checkoutToken">Token obtenido de CreateCheckoutSessionAsync</param>
+        /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
+        /// <returns>Datos completos incluyendo QrImage, Amount, Status, MerchantName</returns>
+        public async Task<CheckoutSessionDetail> GetCheckoutSessionAsync(
+            string checkoutToken,
+            CancellationToken cancellationToken = default)
+        {
+            var response = await GetAsync($"/v1/checkout/sessions/{checkoutToken}", cancellationToken).ConfigureAwait(false);
+            return DeserializeData<CheckoutSessionDetail>(response);
         }
 
         // ─── Payments ────────────────────────────────────────────
+        //
+        // Para WinForms, POS, kioscos, server-to-server:
+        //   CreatePaymentAsync retorna todo en un paso (QR, URL, payment_id).
+        //   NO necesitas checkout sessions.
 
         /// <summary>
-        /// Crea un pago con QR. Retorna datos completos: payment_id, qr_code, checkout_url, etc.
+        /// Crea un pago con QR. Retorna PaymentResponse con PaymentId, QrCode, QrImage, CheckoutUrl.
+        /// Este es el metodo recomendado para WinForms, POS y server-to-server.
         /// </summary>
         /// <param name="parameters">Parametros del pago</param>
         /// <param name="idempotencyKey">Clave unica para evitar pagos duplicados</param>
         /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
-        public async Task<Dictionary<string, object?>> CreatePaymentAsync(
+        public async Task<PaymentResponse> CreatePaymentAsync(
             PaymentParams parameters,
             string idempotencyKey,
             CancellationToken cancellationToken = default)
         {
             var response = await PostAsync("/api/v1/payments", ParamsToDict(parameters), idempotencyKey, cancellationToken).ConfigureAwait(false);
-            return ExtractData(response);
+            return DeserializeData<PaymentResponse>(response);
         }
 
         /// <summary>
@@ -144,12 +217,12 @@ namespace Taypi
         /// </summary>
         /// <param name="paymentId">UUID del pago</param>
         /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
-        public async Task<Dictionary<string, object?>> GetPaymentAsync(
+        public async Task<PaymentResponse> GetPaymentAsync(
             string paymentId,
             CancellationToken cancellationToken = default)
         {
             var response = await GetAsync($"/api/v1/payments/{paymentId}", cancellationToken).ConfigureAwait(false);
-            return ExtractData(response);
+            return DeserializeData<PaymentResponse>(response);
         }
 
         /// <summary>
@@ -157,13 +230,14 @@ namespace Taypi
         /// </summary>
         /// <param name="filters">Filtros opcionales (status, reference, from, to, per_page, page)</param>
         /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
-        public async Task<Dictionary<string, object?>> ListPaymentsAsync(
+        public async Task<PaymentListResponse> ListPaymentsAsync(
             ListPaymentsFilters? filters = null,
             CancellationToken cancellationToken = default)
         {
             var query = BuildQueryString(filters);
             var path = string.IsNullOrEmpty(query) ? "/api/v1/payments" : $"/api/v1/payments?{query}";
-            return await GetAsync(path, cancellationToken).ConfigureAwait(false);
+            var response = await GetAsync(path, cancellationToken).ConfigureAwait(false);
+            return Deserialize<PaymentListResponse>(response);
         }
 
         /// <summary>
@@ -172,13 +246,13 @@ namespace Taypi
         /// <param name="paymentId">UUID del pago</param>
         /// <param name="idempotencyKey">Clave unica para evitar cancelaciones duplicadas</param>
         /// <param name="cancellationToken">Token de cancelacion (opcional)</param>
-        public async Task<Dictionary<string, object?>> CancelPaymentAsync(
+        public async Task<PaymentResponse> CancelPaymentAsync(
             string paymentId,
             string idempotencyKey,
             CancellationToken cancellationToken = default)
         {
             var response = await PostAsync($"/api/v1/payments/{paymentId}/cancel", new Dictionary<string, object?>(), idempotencyKey, cancellationToken).ConfigureAwait(false);
-            return ExtractData(response);
+            return DeserializeData<PaymentResponse>(response);
         }
 
         /// <summary>
@@ -189,10 +263,10 @@ namespace Taypi
         /// <param name="pollingIntervalSeconds">Intervalo entre consultas en segundos (default: 3, min: 1)</param>
         /// <param name="timeoutSeconds">Tiempo maximo de espera en segundos (default: 900 = 15 min)</param>
         /// <param name="cancellationToken">Token de cancelacion</param>
-        /// <returns>Datos del pago con estado terminal</returns>
+        /// <returns>PaymentResponse con estado terminal</returns>
         /// <exception cref="TimeoutException">Si se supera el tiempo maximo de espera</exception>
         /// <exception cref="TaypiException">Si hay error de API o conexion</exception>
-        public async Task<Dictionary<string, object?>> WaitForPaymentAsync(
+        public async Task<PaymentResponse> WaitForPaymentAsync(
             string paymentId,
             int pollingIntervalSeconds = 3,
             int timeoutSeconds = 900,
@@ -208,9 +282,8 @@ namespace Taypi
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var payment = await GetPaymentAsync(paymentId, cancellationToken).ConfigureAwait(false);
-                var status = TryGetString(payment, "status") ?? "";
 
-                if (status == "completed" || status == "expired" || status == "cancelled" || status == "failed")
+                if (payment.Status == "completed" || payment.Status == "expired" || payment.Status == "cancelled" || payment.Status == "failed")
                 {
                     return payment;
                 }
@@ -368,17 +441,6 @@ namespace Taypi
             return dict;
         }
 
-        private static Dictionary<string, object?> ExtractData(Dictionary<string, object?> response)
-        {
-            if (response.TryGetValue("data", out var dataObj) && dataObj is JsonElement element)
-            {
-                var dataDict = JsonSerializer.Deserialize<Dictionary<string, object?>>(element.GetRawText(), JsonOptions);
-                return dataDict ?? response;
-            }
-
-            return response;
-        }
-
         private static string? TryGetString(Dictionary<string, object?> dict, string key)
         {
             if (!dict.TryGetValue(key, out var value) || value == null)
@@ -388,6 +450,38 @@ namespace Taypi
                 return el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
 
             return value.ToString();
+        }
+
+        /// <summary>
+        /// Deserializa el campo "data" de la respuesta API a un tipo fuertemente tipado.
+        /// </summary>
+        private static T DeserializeData<T>(Dictionary<string, object?> response) where T : new()
+        {
+            if (response.TryGetValue("data", out var dataObj) && dataObj is JsonElement element)
+            {
+                var result = JsonSerializer.Deserialize<T>(element.GetRawText(), JsonOptions);
+                if (result != null)
+                    return result;
+            }
+
+            throw new TaypiException(
+                "Respuesta invalida del servidor: campo 'data' no encontrado.",
+                "INVALID_RESPONSE");
+        }
+
+        /// <summary>
+        /// Deserializa la respuesta completa a un tipo fuertemente tipado.
+        /// </summary>
+        private static T Deserialize<T>(Dictionary<string, object?> response) where T : new()
+        {
+            var json = JsonSerializer.Serialize(response, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(json, JsonOptions);
+            if (result != null)
+                return result;
+
+            throw new TaypiException(
+                "Respuesta invalida del servidor.",
+                "INVALID_RESPONSE");
         }
 
         private static string ComputeHmacSha256(string key, string data)
@@ -414,6 +508,48 @@ namespace Taypi
             }
 
             return result == 0;
+        }
+
+        private static void ValidateKeyFormat(string key, string paramName, string expectedPrefix)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                throw new TaypiException(
+                    $"El parametro {paramName} no puede estar vacio.",
+                    "INVALID_KEY_FORMAT");
+            }
+
+            if (!key.StartsWith(expectedPrefix))
+            {
+                throw new TaypiException(
+                    $"Formato de {paramName} invalido. Debe iniciar con \"{expectedPrefix}live_\" o \"{expectedPrefix}test_\". Recibido: \"{Truncate(key, 20)}...\"",
+                    "INVALID_KEY_FORMAT");
+            }
+
+            var afterPrefix = key.Substring(expectedPrefix.Length);
+            if (!afterPrefix.StartsWith("live_") && !afterPrefix.StartsWith("test_"))
+            {
+                throw new TaypiException(
+                    $"Formato de {paramName} invalido. Despues de \"{expectedPrefix}\" debe seguir \"live_\" o \"test_\". Recibido: \"{Truncate(key, 20)}...\"",
+                    "INVALID_KEY_FORMAT");
+            }
+
+            // Validar longitud del token despues del prefijo completo (taypi_pk_live_ = 14 chars, taypi_sk_live_ = 14 chars)
+            var fullPrefix = expectedPrefix + (afterPrefix.StartsWith("live_") ? "live_" : "test_");
+            var token = key.Substring(fullPrefix.Length);
+
+            var expectedLength = expectedPrefix == "taypi_pk_" ? 32 : 64;
+            if (token.Length != expectedLength)
+            {
+                throw new TaypiException(
+                    $"Longitud de {paramName} invalida. Se esperan {expectedLength} caracteres despues de \"{fullPrefix}\", se recibieron {token.Length}.",
+                    "INVALID_KEY_FORMAT");
+            }
+        }
+
+        private static string Truncate(string value, int maxLength)
+        {
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength);
         }
 
         private static string BuildQueryString(ListPaymentsFilters? filters)

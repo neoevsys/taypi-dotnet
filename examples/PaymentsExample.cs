@@ -7,6 +7,7 @@ namespace TaypiExamples
 {
     /// <summary>
     /// Ejemplo: operaciones CRUD de pagos via API directa.
+    /// Recomendado para WinForms, POS, kioscos, server-to-server.
     /// </summary>
     class PaymentsExample
     {
@@ -14,14 +15,13 @@ namespace TaypiExamples
         {
             using var taypi = new TaypiClient(
                 "taypi_pk_test_TU_PUBLIC_KEY_AQUI",
-                "taypi_sk_test_TU_SECRET_KEY_AQUI",
-                new TaypiOptions { BaseUrl = "https://sandbox.taypi.pe" }
+                "taypi_sk_test_TU_SECRET_KEY_AQUI"
             );
 
             try
             {
                 // ─── Crear pago ──────────────────────────────────
-                var payment = await taypi.CreatePaymentAsync(
+                PaymentResponse payment = await taypi.CreatePaymentAsync(
                     new PaymentParams
                     {
                         Amount = "50.00",
@@ -36,27 +36,31 @@ namespace TaypiExamples
                     idempotencyKey: "ORD-789"
                 );
 
-                Console.WriteLine($"Pago creado: {payment["payment_id"]}");
-                Console.WriteLine($"QR checkout: {payment["checkout_url"]}");
+                Console.WriteLine($"Pago creado: {payment.PaymentId}");
+                Console.WriteLine($"QR checkout: {payment.CheckoutUrl}");
+                Console.WriteLine($"QR texto: {payment.QrText}");
+                Console.WriteLine($"QR imagen: {payment.QrImage?.Substring(0, 50)}...");
+                Console.WriteLine($"Expira: {payment.ExpiresAt}");
 
                 // ─── Consultar pago ──────────────────────────────
-                var paymentId = payment["payment_id"]?.ToString() ?? "";
-                var detail = await taypi.GetPaymentAsync(paymentId);
-                Console.WriteLine($"Estado: {detail["status"]}");
+                PaymentResponse detail = await taypi.GetPaymentAsync(payment.PaymentId);
+                Console.WriteLine($"Estado: {detail.Status}");
 
                 // ─── Listar pagos ────────────────────────────────
-                var list = await taypi.ListPaymentsAsync(new ListPaymentsFilters
+                PaymentListResponse list = await taypi.ListPaymentsAsync(new ListPaymentsFilters
                 {
                     Status = "completed",
                     From = "2026-03-01",
                     To = "2026-03-31",
                     PerPage = 20
                 });
-                Console.WriteLine($"Pagos: {list["data"]}");
+                Console.WriteLine($"Total pagos: {list.Meta.Total}");
+                foreach (var p in list.Data)
+                    Console.WriteLine($"  {p.PaymentId} — S/{p.Amount} — {p.Status}");
 
                 // ─── Cancelar pago pendiente ─────────────────────
-                var cancelled = await taypi.CancelPaymentAsync(paymentId, "cancel-ORD-789");
-                Console.WriteLine($"Cancelado: {cancelled["status"]}");
+                PaymentResponse cancelled = await taypi.CancelPaymentAsync(payment.PaymentId, "cancel-ORD-789");
+                Console.WriteLine($"Cancelado: {cancelled.Status}");
             }
             catch (TaypiException ex)
             {
